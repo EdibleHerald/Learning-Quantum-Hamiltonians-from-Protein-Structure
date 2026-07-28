@@ -218,4 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 ./.gitignore
+/Sample_Proteins
 exampleStructures
+file_notes
+old*
