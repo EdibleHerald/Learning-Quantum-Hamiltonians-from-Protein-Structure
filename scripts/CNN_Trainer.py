@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from Bio.PDB import PDBParser
 from torch.utils.data import Dataset, DataLoader
 import sys
-sys.path.append('scripts')
+#sys.path.append('scripts')
 import pdb_to_graph
 import mldft_surrogate
 import verify_twin_pipeline
@@ -62,7 +62,7 @@ print(X.shape)
 print(teach_cofficients.shape)
 
 #creating dataloader
-dataset = ProteinDataset(X,graphs, coefficients)
+dataset = ProteinDataset(X,graphs, teach_coefficients)
 #now automatcally loads proteins and shuffles order 
 #loader = DataLoader(dataset,batch_size=1,shuffle=True)
 
@@ -100,33 +100,30 @@ optimizer = torch.optim.Adam(cnn_model.parameters(), lr=0.001)
 
 #training loop
 #epoch = iterations 
-epochs = 200
+epochs = 500
 loss_history = []
 for epoch in range(epochs):
     #track loss
     total_loss = 0
     for voxel, graph, target in loader:
         #instead gnn creates target 
-        with torch.no_grad():
+        #with torch.no_grad():
+            #graph = graph([0])
             #target = gnn_model(graph)
             #target = torch.mean(target,dim=0,keepdim=True)
         # cnn prediction
             prediction = cnn_model(voxel)
-        #match dimensions just in case
-        if prediction.ndim == 1:
-            prediction = prediction.unsqueeze(0)
-        if target.ndim == 1:
-            target = target.unsqueeze(0)
         # Compare prediction with target coefficients 
-        loss = criterion(prediction,target)
+            loss = criterion(prediction,target)
         # remove old gradients 
-        optimizer.zero_grad()
+            optimizer.zero_grad()
         #calculate how values should change
-        loss.backward()
+            loss.backward()
         #update values 
-        optimizer.step()
-        total_loss += loss.item()
+            optimizer.step()
+            total_loss += loss.item()
     avg_loss = total_loss / len(loader)
     loss_history.append(total_loss)
     #Note: ideally loss should decrease overtime
     print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss:.6f}")
+    torch.save(cnn_model.state_dict(),"protein_cnn3.pth")
