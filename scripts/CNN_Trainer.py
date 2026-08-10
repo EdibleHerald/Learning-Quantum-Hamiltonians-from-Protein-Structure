@@ -41,6 +41,10 @@ X = []
 graphs = []
 teach_coefficients = []
 
+#create cnn and gnn
+cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites=4)
+gnn_model = mldft_surrogate.MLDFT_GNN(num_sites = 4)
+
 for pdb in proteins:
     #convert to voxel grid
     voxel = pdb_voxelizier.pdb_to_tensor(pdb, grid_size=32)
@@ -50,9 +54,13 @@ for pdb in proteins:
     graph = pdb_to_graph.pdb_to_graph(pdb, distance_threshold = 5.0)
     graphs.append(graph)
 
-    coefficients = mldft_surrogate.get_mldft_hamiltonian(graph, num_qubits = 4)
-    coefficients = np.asarray(coefficients, dtype = np.float32)
-    coefficients = coefficients.reshape(-1)
+    #coefficients = mldft_surrogate.get_mldft_hamiltonian(graph, num_qubits = 4)
+    with torch.no_grad():
+        coefficients = gnn_model(graph)
+
+    coefficients = (coefficients.cpu().numpy())
+    #coefficients = np.asarray(coefficients, dtype = np.float32)
+    #coefficients = coefficients.reshape(-1)
     teach_coefficients.append(coefficients)
 X = np.asarray(X, dtype = np.float32)
 teach_cofficients = np.asarray(teach_coefficients, dtype = np.float32)
@@ -84,8 +92,8 @@ def collate_proteins(batch):
 loader = DataLoader(dataset,batch_size=1,shuffle=True, collate_fn=collate_proteins)
 
 #create cnn and gnn
-cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites=4)
-gnn_model = mldft_surrogate.MLDFT_GNN(num_sites = 4)
+#cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites=4)
+#gnn_model = mldft_surrogate.MLDFT_GNN(num_sites = 4)
 #print(cnn_model)
 
 #
@@ -96,34 +104,38 @@ for param in gnn_model.parameters():
 #mean squared error : helps keep error positive 
 criterion = nn.MSELoss()
 #just using adam for now
-optimizer = torch.optim.Adam(cnn_model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(cnn_model.parameters(), lr=0.0001)
 
 #training loop
 #epoch = iterations 
-epochs = 500
+epochs = 175
 loss_history = []
 for epoch in range(epochs):
     #track loss
     total_loss = 0
     for voxel, graph, target in loader:
         #instead gnn creates target 
-        #with torch.no_grad():
-            #graph = graph([0])
-            #target = gnn_model(graph)
-            #target = torch.mean(target,dim=0,keepdim=True)
+        
+        
+        graph = graph[0]
+        with torch.no_grad():
+            target = gnn_model(graph)
+        #target = torch.mean(target,dim=0,keepdim=True)
         # cnn prediction
-            prediction = cnn_model(voxel)
+        prediction = cnn_model(voxel)
         # Compare prediction with target coefficients 
-            loss = criterion(prediction,target)
+        loss = criterion(prediction,target)
         # remove old gradients 
-            optimizer.zero_grad()
+        optimizer.zero_grad()
         #calculate how values should change
-            loss.backward()
+        loss.backward()
         #update values 
-            optimizer.step()
-            total_loss += loss.item()
+        optimizer.step()
+        total_loss += loss.item()
     avg_loss = total_loss / len(loader)
     loss_history.append(total_loss)
     #Note: ideally loss should decrease overtime
     print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss:.6f}")
-    torch.save(cnn_model.state_dict(),"protein_cnn3.pth")
+
+torch.save(cnn_model.state_dict(),"protein_cnn3.pth")
+torch.save(gnn_model.state_dict(),"protein_gnn3.pth")
