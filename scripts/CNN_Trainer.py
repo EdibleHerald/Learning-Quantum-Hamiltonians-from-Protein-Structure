@@ -37,8 +37,7 @@ class ProteinDataset(Dataset):
         return voxel, graph, coefficients
 
 def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32, distance_threshold:float = 5.0, epochs:int = 100)->None:
-
-    proteins = [os.path.join("proteins",x) for x in os.listdir('proteins')]
+    proteins = [os.path.join(protein_dir,x) for x in os.listdir(protein_dir)]
     print(proteins)
     # stores input protein voxel and graphs (x,graph)
     X = []
@@ -63,19 +62,15 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
             coefficients = gnn_model(graph)
 
         coefficients = (coefficients.cpu().numpy())
-        #coefficients = np.asarray(coefficients, dtype = np.float32)
-        #coefficients = coefficients.reshape(-1)
         teach_coefficients.append(coefficients)
     X = np.asarray(X, dtype = np.float32)
-    teach_cofficients = np.asarray(teach_coefficients, dtype = np.float32)
+    teach_coefficients = np.asarray(teach_coefficients, dtype = np.float32)
 
     #print(X.shape)
-    #print(teach_cofficients.shape)
+    #print(teach_coefficients.shape)
 
     #creating dataloader
     dataset = ProteinDataset(X,graphs, teach_coefficients)
-    #now automatcally loads proteins and shuffles order 
-    #loader = DataLoader(dataset,batch_size=1,shuffle=True)
 
     def collate_proteins(batch):
         voxels = []
@@ -91,7 +86,8 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         # Stack coefficient targets
         coefficients = torch.stack(coefficients)
         return voxels, graphs, coefficients
-
+    
+    #now automatcally loads proteins and shuffles order 
     loader = DataLoader(dataset,batch_size=1,shuffle=True, collate_fn=collate_proteins)
 
     
@@ -112,9 +108,9 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         for voxel, graph, target in loader:
             #instead gnn creates target 
             #graph = graph[0]
-            print('---')
-            print(graph[0])
-            print('---')
+            #print('---')
+            #print(graph[0])
+            #print('---')
             with torch.no_grad():
                 target = gnn_model(graph[0])
             # cnn prediction
@@ -133,7 +129,8 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         #Note: ideally loss should decrease overtime
         print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss:.6f}")
 
+    #return cnn_model.state_dict(), gnn_model.state_dict()
     torch.save(cnn_model.state_dict(),"protein_cnn3.pth")
     torch.save(gnn_model.state_dict(),"protein_gnn3.pth")
 
-return_pretrained_CNN(protein_dir='proteins')
+#return_pretrained_CNN(protein_dir='proteins')
