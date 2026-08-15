@@ -5,17 +5,14 @@ import numpy as np
 from Bio.PDB import PDBParser
 from torch.utils.data import Dataset, DataLoader
 import os
-import sys
-sys.path.append('proteins')
 import pdb_to_graph
 import mldft_surrogate
 import verify_twin_pipeline
 import pdb_voxelizier
 import cnn_mlp_encoder
-import jw_quantum_mapper
+import hash_for_cache
 import psutil
 from multiprocessing import Pool
-import functools
 from diskcache import Cache
 
 TOTAL_THREAD_COUNT = psutil.cpu_count()
@@ -64,32 +61,52 @@ def get_protein_data(protein_path_list:list(str),num_sites:int=4,grid_size:int=3
     # proteins = [os.path.join(protein_dir,x) for x in os.listdir(protein_dir)]
     proteins = protein_path_list
     
-    # for pdb in proteins:
-    #     # Convert to voxel grid
-    #     voxel = pdb_voxelizier.pdb_to_tensor(pdb, grid_size)
-    #     # Store voxel
-    #     X.append(voxel[0])
-    #     # Try to get gnn input
-    #     graph = pdb_to_graph.pdb_to_graph(pdb, distance_threshold)
-    #     graphs.append(graph)
-
-    #     #coefficients = mldft_surrogate.get_mldft_hamiltonian(graph, num_qubits = 4)
-    #     with torch.no_grad():
-    #         coefficients = gnn_model(graph)
-
-    #     coefficients = (coefficients.cpu().numpy())
-    #     teach_coefficients.append(coefficients)
-
+    # We implement a naive cache system.
+    # We turn the list into a frozenset to be hashed, then search for it in our cache. Otherwise we run calculations and then store the result in cache
+    # (Smarter would be to cache graph results for each individual protein)
+    protein_name_list = [x.split("/")[-1] for x in proteins]
+    
+    # We want two hashes:
+    # One for a list of proteins at a specific grid_size (voxel cache). 
+    voxel_hash_exist = False # Bool to check if a cached result exists
+    voxel_hash = hash_for_cache.voxel_json_encoder(protein_list=protein_name_list,grid_size=grid_size).hexdigest()
+    
+    # One for a list of proteins at a specific distance threshold (graph cache)
+    graph_hash_exist = False
+    graph_hash = hash_for_cache.graph_json_encoder(protein_list=protein_name_list,distance_threshold=distance_threshold).hexdigest()
+    
+    with Cache("__scriptcache__") as cache:
+        if voxel_hash in cache:
+            # We just fetch the results!
+            voxel_list = cache[voxel_hash]
+            voxel_hash_exist = True
+            print("Fetching cached voxels!")
+        
+        if graph_hash in cache:
+            # Fetch results
+            graph_list = cache[graph_hash]
+            graph_hash_exist = True
+            print("Fetching cached graphs!")
+    
     # Create argument tuples for parallel processing
-    voxel_args = [(x,grid_size) for x in proteins]
-    graph_args = [(x,distance_threshold) for x in proteins]
+    voxel_args = [(x,grid_size) for x in proteins] if not voxel_hash_exist else None
+    graph_args = [(x,distance_threshold) for x in proteins] if not graph_hash_exist else None
+    
     with Pool(THREAD_COUNT) as p:
         # Get all voxels and graphs we need for training!
-        voxel_list = p.starmap(pdb_voxelizier.pdb_to_tensor,voxel_args)
-        graph_list = p.starmap(pdb_to_graph.pdb_to_graph,graph_args)
+        voxel_list = p.starmap(pdb_voxelizier.pdb_to_tensor,voxel_args) if not voxel_hash_exist else voxel_list
+        graph_list = p.starmap(pdb_to_graph.pdb_to_graph,graph_args) if not graph_hash_exist else graph_list
     
-    print(f"Size of voxel_list = {len(voxel_list)}")
-    print(f"Size of graph_list = {len(graph_list)}")
+    # Store new lists in cache if not fetched from cache:
+    with Cache("__scriptcache__") as cache:
+        if not voxel_hash_exist:
+            cache[voxel_hash] = voxel_list
+        
+        if not graph_hash_exist:
+            cache[graph_hash] = graph_list
+
+    # print(f"Size of voxel_list = {len(voxel_list)}")
+    # print(f"Size of graph_list = {len(graph_list)}")
 
     # NEEDS WORKING:
     # 1. GENERATE COEFFICIENTS (done!)
@@ -100,37 +117,46 @@ def get_protein_data(protein_path_list:list(str),num_sites:int=4,grid_size:int=3
     voxel_list = np.asarray(voxel_list, dtype = np.float32)
     training_data = get_gnn_predictions(graph_dict_list=graph_list, num_sites=num_sites)
     
-    print(f"Size of new voxel_list = {len(voxel_list)}")
-    print(f"Size of training_data = {len(training_data)}")
-    print(f"Size of graph_list = {len(graph_list)}")
+    # print(f"Size of new voxel_list = {len(voxel_list)}")
+    # print(f"Size of training_data = {len(training_data)}")
+    # print(f"Size of graph_list = {len(graph_list)}")
 
     # Create DataLoader
     dataset = ProteinDataset(voxel_list,graph_list,training_data)
 
-    # Function used to package all data into DataLoader
+    # Function used to package all data into DataLoader (misconception: Each data point is called once so we're returning a list with a single tensor each time, odd...)
+    # Additionally, we can't shuffle items with batch size of 1.
     def collate_proteins(batch):
-        voxels = []
-        graphs = []
-        coefficients = []
+        # TO DO: PASS IN DIFFERENT SIZE BATCHES (OR PLAY WITH THAT IDEA)
+        # RIGHT NOW:
+        # - batch = list of each batch, so batch[0] = first batch of [voxel,graph,coef] and so on
+        # print(len(batch[0]))
+        voxels = batch[0][0]
+        graphs = batch[0][1]
+        coefficients = batch[0][2]
 
-        for voxel, graph, coeff in batch:
-            voxels.append(voxel)
-            graphs.append(graph)
-            coefficients.append(coeff)
-        
-        print(f"Size is: {len(voxels)}")
-        assert len(voxels) == len(graphs) == len(coefficients)
+        # num = 0
+        # for voxel, graph, coeff in batch:
+        #     voxels.append(voxel)
+        #     graphs.append(graph)
+        #     coefficients.append(coeff)
+        #     num+=1
+        #     # print(f"Iteration {num} !")
+        # print(batch)
+        # print(type(batch))
+        # print(f"Size is: {len(voxels)}")
+        # assert len(voxels) == len(graphs) == len(coefficients)
         
         # Stack CNN inputs (aka, combine into one new tensor via a new dimension)
-        voxels = torch.stack(voxels)
-        print(voxels.size())
+        # voxels = torch.stack(voxels)
+        # print(voxels.size())
         # Stack coefficient targets
-        coefficients = torch.stack(coefficients)
-        print(coefficients.size())
+        # coefficients = torch.stack(coefficients)
+        # print(coefficients.size())
         return voxels, graphs, coefficients
     
     # Now automatically loads proteins and shuffles order 
-    loader = DataLoader(dataset,batch_size=1,shuffle=True, collate_fn=collate_proteins)
+    loader = DataLoader(dataset,batch_size=1,shuffle=False, collate_fn=collate_proteins)
     
     return loader
 
@@ -158,13 +184,17 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
     curr_iter = 0
     
     pref_loss = 0.00005
+    #test set
+    test_set = set()
     while total_loss > pref_loss and curr_iter != MAX_ITER:
         total_loss = 0
         # Track loss
         for voxel, graph, target in loader:
-
+            test_set.add(voxel)
+            test_set.add(graph['x'])
+            test_set.add(target)
             # CNN prediction
-            prediction = cnn_model(voxel.squeeze(0)).squeeze(0)
+            prediction = cnn_model(voxel).squeeze(0)
             
             # Compare prediction with target coefficients 
             loss = criterion(prediction,target)
@@ -182,12 +212,15 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         #Note: ideally loss should decrease overtime
         epoch += 1
         curr_iter += 1
-        print(f"Epoch {epoch}/{epochs}, Loss: {total_loss:.6f}")
+        print(f"Epoch {epoch}/{MAX_ITER}, Loss: {total_loss:.6f}")
     
+    print(f"Size of set should be {len(proteins)*3}, is {len(test_set)}")
+
     if total_loss <= pref_loss:
         print(f"Successfully pre-trained CNN model with loss of {total_loss} at {epoch} epochs")
-
-    #return cnn_model.state_dict(), gnn_model.state_dict()
+    else:
+        print(f"Training stopped after reaching max iterations of {MAX_ITER}. Loss: {total_loss}")
+    
     torch.save(cnn_model.state_dict(),"protein_cnn3.pth")
 
-return_pretrained_CNN(protein_dir='testing_proteins')
+return_pretrained_CNN(protein_dir='exampleStructures')
