@@ -1,8 +1,13 @@
+import os
+# Prevents low-level language libraries from manually managing threads.
+# This is needed because deadlocking can easily occur if both the library and this script is competing for cores.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-import os
 import pdb_to_graph
 import mldft_surrogate
 import verify_twin_pipeline
@@ -41,21 +46,20 @@ class ProteinDataset(Dataset):
         return voxel, coeff
 
 # Returns untrained GNN predictions and saves model under a name
-def get_gnn_predictions(graph_dict_list:list,num_sites:int):
+def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
     gnn_model = mldft_surrogate.MLDFT_GNN(num_sites)
     
     # Prepare model for predictions by putting into evaluation mode/disabling gradients
     gnn_model.eval()
     for param in gnn_model.parameters():
         param.requires_grad = False
-    
-    # Prepare list of arguments for parallel predictions
-    with Pool(THREAD_COUNT) as p:
-        predicts = p.map(gnn_model.forward,graph_dict_list)
-    
+
+    # Parallel process GNN predictions using the calculated graphs
+    predicts = pool.map(gnn_model.forward,graph_dict_list)
+
     # Save model to test against later
     torch.save(gnn_model.state_dict(),"__temp__/models/protein_gnn.pt")
-    
+
     return predicts
 
 # Function used to package all data into DataLoader
@@ -72,11 +76,11 @@ def collate_proteins(batch):
         # Stack voxel and prediction tensors into one for faster processing! 
         voxels = torch.stack(voxels)
         coefficients = torch.stack(coefficients)
-
+        
         return voxels, coefficients, curr_batch_size
 
 # Returns DataLoader to be used for training.
-def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,grid_size:int=32,distance_threshold:float=5.0):
+def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,grid_size:int=32,distance_threshold:float=5.0,pool:Pool=None):
     
     # Lists for storing protein names, argument tuples, and cached results
     cached_voxel_protein_names = []        
@@ -117,10 +121,13 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
                 graph_args_list.append((protein_path,distance_threshold))
                 graph_protein_names.append(protein_name) # Append name for later caching
     
-    with Pool(THREAD_COUNT) as p:
-        # Get all voxels and graphs we need for training!
-        temp_voxel_list = p.starmap(pdb_voxelizier.pdb_to_tensor,voxel_args_list)
-        temp_graph_list = p.starmap(pdb_to_graph.pdb_to_graph,graph_args_list)
+    # Lists will stay None if not initiated by Pool (i.e. theres no computations to complete)
+    temp_voxel_list = None
+    temp_graph_list = None
+    
+    # Get all voxels and graphs we need for training!
+    temp_voxel_list = pool.starmap(pdb_voxelizier.pdb_to_tensor,voxel_args_list)
+    temp_graph_list = pool.starmap(pdb_to_graph.pdb_to_graph,graph_args_list)
     
     # Store new lists in cache if not fetched from cache:
     # This basically means every item in the "temp_" lists
@@ -135,14 +142,14 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
             for result,protein_name in zip(temp_graph_list,graph_protein_names):
                 graph_hash = hash_for_cache.graph_json_encoder(protein=protein_name,distance_threshold=distance_threshold).hexdigest()
                 cache[graph_hash] = result
-
+    
     # Combined cached structures with newly computed ones (if there were any computed)
     voxel_list = voxel_list + temp_voxel_list if temp_voxel_list else voxel_list
     graph_list = graph_list + temp_graph_list if temp_graph_list else graph_list
 
     # Needs to be np.array because for some reason ProteinDataset expects it
     voxel_list = np.asarray(voxel_list, dtype = np.float32)
-    training_data = get_gnn_predictions(graph_dict_list=graph_list, num_sites=num_sites)
+    training_data = get_gnn_predictions(graph_dict_list=graph_list, num_sites=num_sites,pool=pool) # Pass down pool to avoid deadlocking
     
     # Create DataLoader
     dataset = ProteinDataset(voxel_list,training_data)
@@ -167,8 +174,10 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
     # Get list of all proteins to train against
     proteins = [os.path.join(protein_dir,x) for x in os.listdir(protein_dir)]
     
-    # Get protein data:
-    loader, voxel_list_tuple, training_data = get_protein_data(protein_path_list=proteins,num_sites=num_sites,grid_size=grid_size,distance_threshold=distance_threshold,batch_size=batch_size)
+    # Create Pool to pass down to other subprocesses (to avoid deadlocking and repetitive code)
+    with Pool(THREAD_COUNT) as p:
+        # Get protein data:
+        loader, voxel_list_tuple, training_data = get_protein_data(protein_path_list=proteins,num_sites=num_sites,grid_size=grid_size,distance_threshold=distance_threshold,batch_size=batch_size,pool=p)
 
     # Training loop
     total_loss = float("inf")
@@ -231,13 +240,15 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
             print(f"Protein {i[0]} had loss of {i[1]}")
     else:
         print("Verified model accuracy is satisfactory.")
+        print("All predictions meet the 0.043 eV chemical accuracy threshold!")
     
     if total_loss <= pref_loss:
-        print(f"Successfully pre-trained CNN model with loss total of {total_loss:.6f} at {epoch} epochs. All predictions meet the 0.043 eV chemical accuracy threshold!")
+        print(f"Successfully pre-trained CNN model with loss total of {total_loss:.6f} at {epoch} epochs.")
     else:
         print(f"Training stopped after reaching max iterations of {MAX_ITER}. Loss: {total_loss}")
     
     torch.save(cnn_model.state_dict(),"__temp__/models/protein_cnn.pt")
+    return None
 
 # Example Use:  
 # return_pretrained_CNN("proteins",loss_threshold=0.01)
