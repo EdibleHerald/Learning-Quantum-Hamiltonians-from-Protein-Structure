@@ -156,7 +156,7 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
     # We return loader for training, with voxel_list_tuple and training data for later verification
     return loader,voxel_list_tuple,training_data
 
-def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32, distance_threshold:float = 5.0,max_iterations:int=1000,loss_threshold:float=0.043,batch_size:int=32):
+def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32, distance_threshold:float = 5.0,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32):
     # Create CNN
     cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites)
 
@@ -246,3 +246,4 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
 # - Consider a better way to improve caching system. Currently, caching voxels/graphs for 30~ proteins is rather expensive at 78Mb
 #   e.g. Theres (right now) 28 proteins in protein folder at 12Mb total while the cache sits at 70Mb. 
 #        This will only get more expensive as resolution of voxels/graphs grow or as more proteins are added.
+# - Consider finding the optimal learning rate for the Adam optimizer. Likely we be a very expensive endeavor and may not be worth the trouble.
