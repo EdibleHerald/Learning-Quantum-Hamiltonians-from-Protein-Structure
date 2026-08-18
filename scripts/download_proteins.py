@@ -48,7 +48,18 @@ training_protein_urls = [
     "6J60",
     "6M91",
     "7F07",
-    "9N97"
+    "9N97",
+    "9CN2",
+    "8SOW",
+    "8SOZ",
+    "6VUO",
+    "7KBP",
+    "6VRP",
+    "1SVZ",
+    "1MOE",
+    "6OL7",
+    "5C6W"
 ]
 
-download_proteins("proteins",training_protein_urls,False)
+download_proteins("proteins",training_protein_urls,True)
+

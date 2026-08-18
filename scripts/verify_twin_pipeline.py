@@ -10,6 +10,10 @@ import mldft_surrogate
 import pdb_voxelizier
 import cnn_mlp_encoder
 import jw_quantum_mapper
+import multiprocessing
+multiprocessing.set_start_method("fork") # Forkserver on Linux fails....for some reason. 
+from multiprocessing import Pool
+
 
 def build_matrix(coefficients, num_sites):
     """Reconstructs the 2D Hamiltonian Matrix from 1D coefficients."""
@@ -39,25 +43,38 @@ def cross_verify_pipelines(coeffs_track_A, coeffs_track_B, num_sites=4):
     
     # CHECKPOINT 1: Mathematical Accuracy
     mae = np.mean(np.abs(coeffs_track_A - coeffs_track_B))
+    
+    # Uncomment below to get verbose information
     # print(f"\n[Checkpoint 1] Coefficient Mean Absolute Error (MAE): {mae:.6f} eV")
     # if mae < 0.05:
     #     print("-> Status: PASS (High Mathematical Agreement)")
     # else:
     #     print("-> Status: WARNING (Check spatial mapping drift)")
-        
+    
     # CHECKPOINT 2: Physical Ground State Energy
-    mat_A = build_matrix(coeffs_track_A, num_sites)
-    mat_B = build_matrix(coeffs_track_B, num_sites)
+    # Parallelize for small efficiency gain
+    if __name__ == "verify_twin_pipeline":
+        with Pool(2) as p:
+            result = p.starmap(func=build_matrix,iterable=[(coeffs_track_A,num_sites),(coeffs_track_B,num_sites)])
+    mat_A = result[0]
+    mat_B = result[1]
+    
+    
     
     # Diagonalize both to find E0 (lowest eigenvalue)
-    eigenvalues_A = np.linalg.eigvalsh(mat_A)
-    eigenvalues_B = np.linalg.eigvalsh(mat_B)
-    
+    # Parallelize for small efficiency gain
+    if __name__ == "verify_twin_pipeline":
+        with Pool(2) as p:
+            result = p.map(func=np.linalg.eigvalsh,iterable=[mat_A,mat_B])
+    eigenvalues_A = result[0]
+    eigenvalues_B = result[1]
+
     E0_A = eigenvalues_A[0]
     E0_B = eigenvalues_B[0]
     
     delta_E = np.abs(E0_A - E0_B)
     
+    # Uncomment below to get verbose information
     # print(f"\n[Checkpoint 2] Physical Ground State Energy (E0)")
     # print(f"Track A (3D CNN) E0 : {E0_A:.6f} eV")
     # print(f"Track B (ML-DFT) E0 : {E0_B:.6f} eV")
@@ -77,7 +94,7 @@ def cross_verify_pipelines(coeffs_track_A, coeffs_track_B, num_sites=4):
 def run_verification(test_protein_dir:str,num_sites:int=4,grid_size:int=32,distance_threshold:float=5.0):
     proteins = [os.path.join(test_protein_dir,x) for x in os.listdir(test_protein_dir)] # Get all protein paths
     
-    print(proteins)
+    # print(proteins)
     # Load models for testing:
     # CNN model:
     cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites=num_sites)
@@ -109,6 +126,7 @@ def run_verification(test_protein_dir:str,num_sites:int=4,grid_size:int=32,dista
 
         # 3. Run the Verification (Assuming you have 'cnn_coefficients' from Track A)
         #cnn_coefficients = mldft_coefficients + np.random.normal(0, 0.01, 10)
+        
         passed = cross_verify_pipelines(cnn_coefficients, mldft_coefficients, num_sites=num_sites)
         
         if passed[0]:
@@ -118,4 +136,10 @@ def run_verification(test_protein_dir:str,num_sites:int=4,grid_size:int=32,dista
         
 # Usage:
 # cross_verify_pipelines(cnn_coeffs, mldft_coeffs, num_sites=4)
-run_verification("testing_proteins")
+# print(run_verification("exampleStructures"))
+
+
+# cnn_coef = np.array([ 0.5256421 , -0.18717101,  0.11206499,  0.4405638 , -0.07213806, -0.5189328 , -0.50337166, -0.13883707, -0.85241264,  0.37721214])
+# mldft_coef = np.array([ 0.3970126 , -0.13355608,  0.077498,  0.319919 , -0.03946331, -0.3948239 , -0.38502923, -0.105671 , -0.63055885,  0.28899044])
+# print(cross_verify_pipelines(cnn_coef,mldft_coef,4))
+
