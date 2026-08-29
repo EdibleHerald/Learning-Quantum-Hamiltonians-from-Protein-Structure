@@ -1,6 +1,7 @@
 import numpy as np
 from Bio.PDB import PDBParser
 import torch
+from scipy.spatial import KDTree
 
 def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
     """
@@ -31,14 +32,40 @@ def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
         raise ValueError("No atoms found in PDB.")
     
     # Build Edges (Adjacency list) based on distance
+    edge_set = set() # To avoid duplicates
     edges = []
+    
+    # Create KDTree to query nearest neighbors.
+    kdtree = KDTree(coords_np)
+
     num_atoms = len(coords_np)
     for i in range(num_atoms):
-        for j in range(i + 1, num_atoms):
-            dist = np.linalg.norm(coords_np[i] - coords_np[j])
-            if dist < distance_threshold:
-                edges.append([i, j])
-                edges.append([j, i]) # Undirected graph
+        # Fetch all points within 'distance_threshold' angstroms, returning sorted indices. 
+        atom_list = kdtree.query_ball_point(x=coords_np[i],r=distance_threshold,return_sorted=True)
+        
+        for j in range(len(atom_list)):
+            index = atom_list[j]
+            
+            # Skip adding edges that references itself (i.e. Not an actual relationship)
+            if i == index:
+                continue
+            
+            # Calculate distance between both atoms
+            atom_distance = np.linalg.norm(coords_np[i] - coords_np[index])
+            if atom_distance < distance_threshold:
+                # Create both tuples to check for
+                tuple1,list1 = (i,index),[i,index]
+                tuple2,list2 = (index,i),[index,i]
+                
+                # Selectively add edges that don't already exist
+                if tuple1 not in edge_set:
+                    edges.append(list1)
+                    edge_set.add(tuple1)
+                
+                if tuple2 not in edge_set:
+                    edges.append(list2)        
+                    edge_set.add(tuple2)
+    
     edges_np = np.array(edges).T # Shape [2, num_edges]
     
     return {
@@ -48,9 +75,4 @@ def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
     }
 
 # Usage:
-# graph_data = pdb_to_graph("testing_proteins/1F3R.pdb")
-
-# 11.5s on average for 1F3R.pdb with no parallelization
-# Resulting Edges array:
-# [[   0    1    0 ... 3976 3975 3976]
-# [   1    0    2 ... 3974 3976 3975]]
+# graph_data = pdb_to_graph("proteins/3IY6.pdb")
