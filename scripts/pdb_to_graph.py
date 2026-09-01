@@ -2,6 +2,7 @@ import numpy as np
 from Bio.PDB import PDBParser
 import torch
 from scipy.spatial import KDTree
+from active_site_calculation import active_site_calculation
 
 def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
     """
@@ -12,19 +13,8 @@ def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure("protein", pdb_filepath)
     
-    coordinates = []
-    atomic_numbers = []
+    coordinates,atomic_numbers = active_site_calculation(pdb_filepath=pdb_filepath,distance_threshold=distance_threshold)
     
-    # Standard mapping for simple proteins
-    element_map = {'C': 6, 'N': 7, 'O': 8, 'H': 1, 'S': 16}
-    for model in structure:
-        for chain in model:
-            for residue in chain:
-                for atom in residue:
-                    coordinates.append(atom.get_coord())
-                    elem = atom.element.upper()
-                    atomic_numbers.append(element_map.get(elem, 6)) # Default to Carbon if unknown
-      
     coords_np = np.array(coordinates)
     atoms_np = np.array(atomic_numbers)
     
@@ -75,4 +65,5 @@ def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
     }
 
 # Usage:
-# graph_data = pdb_to_graph("proteins/3IY6.pdb")
+# graph_data = pdb_to_graph("proteins/training_proteins/9ATK.pdb")
+

@@ -1,26 +1,15 @@
 import numpy as np
 import warnings
 from Bio.PDB import PDBParser
+from active_site_calculation import active_site_calculation
 
-def pdb_to_tensor(pdb_filepath, grid_size=32):
+def pdb_to_tensor(pdb_filepath, grid_size:int,distance_threshold:float):
     """
     Parses a PDB file, extracts atomic coordinates, and maps them to a 3D Voxel Tensor.
     """
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_filepath)
     
-    # 1. Extract all X,Y,Z coordinates
-    coords = []
-    for model in structure:
-        for chain in model:
-            for residue in chain:
-                for atom in residue:
-                    coords.append(atom.get_coord())
+    coords,atom_info = active_site_calculation(pdb_filepath=pdb_filepath,distance_threshold=distance_threshold)
     
-    coords = np.array(coords)
-    if len(coords) == 0:
-        raise ValueError("No atomic coordinates found in PDB file.")
-
     # 2. Normalize coordinates to fit within our 3D grid
     min_coords = coords.min(axis=0)
     max_coords = coords.max(axis=0)
