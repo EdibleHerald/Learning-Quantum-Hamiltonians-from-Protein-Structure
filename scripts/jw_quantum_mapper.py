@@ -1,4 +1,5 @@
 import numpy as np
+from qiskit.quantum_info import SparsePauliOp
 
 def apply_jw(coefficients, num_sites=4):
     """
@@ -42,6 +43,50 @@ def apply_jw(coefficients, num_sites=4):
             index += 1
             
     return pauli_strings
+
+# To convert our list of strings into a PauliSum, we need to loop through each instruction
+def convert_qubit_operators_to_pauli_operators(qubit_operators:list,num_sites:int):
+    coef_list = []
+    op_list = []
+    # mp_coef_list = []
+    # multi_qubit_operator_set = list()
+    for i in qubit_operators:
+        # Split up the operation into coefficient and the gates
+        operation_list = i.split("*")
+        
+        # We grab the coefficient as a float and each operator as a single string   
+        coef = float(operation_list[0])
+        operators = operation_list[1].strip().split(" ")
+
+        coef_list += [coef]
+        
+        # Go through each operator in the list, convert to Qiskit 'Pauli' term
+        # First, we create a list of identity terms since each Pauli needs to be the same dimension
+        start_op_list = list("I" * (num_sites * 2)) # Since spin isn't measured, we need to pad out the qubit operator size for UCCSD to accept it, this padding doesn't change the physics.
+        
+        # We want to not add even-numbered Y amount of observables due to creating zero gradients
+        # (Insert reference here)
+        # y_count = None
+        for term in operators:
+            
+            # if term[0] == "Y":
+            #     if y_count is None:
+            #         y_count = 0
+            #     y_count += 1
+            
+            # First term is letter, next is integer
+            start_op_list[int(term[1])] = term[0]
+        
+        # Additionally, we can also define our multi-qubit operators here! (Note, some single-qubit operators are here too but we deal with that later!)
+        fin_str = "".join(start_op_list)
+        
+        # if y_count is None or y_count % 2 == 1:
+        #     multi_qubit_operator_set.append(fin_str)
+        #     mp_coef_list.append(coef)
+        
+        op_list.append(fin_str)
+    
+    return SparsePauliOp(data=op_list,coeffs=coef_list)
 
 def display_instructions(pauli_strings):
     print("--- QUANTUM HARDWARE INSTRUCTIONS ---")

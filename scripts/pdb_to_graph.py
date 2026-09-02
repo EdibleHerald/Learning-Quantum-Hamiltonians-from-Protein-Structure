@@ -2,21 +2,20 @@ import numpy as np
 from Bio.PDB import PDBParser
 import torch
 from scipy.spatial import KDTree
-from active_site_calculation import active_site_calculation
 
-def pdb_to_graph(pdb_filepath, distance_threshold=5.0):
+def protein_to_graph(coords_np,atoms_np, distance_threshold=5.0):
     """
     Reads a PDB file and converts it into a molecular graph.
     Nodes = Atoms (Coordinates & Elements)
     Edges = Connections based on spatial distance threshold (e.g., < 5.0 Angstroms).
     """
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_filepath)
+    # parser = PDBParser(QUIET=True)
+    # structure = parser.get_structure("protein", pdb_filepath)
     
-    coordinates,atomic_numbers = active_site_calculation(pdb_filepath=pdb_filepath,distance_threshold=distance_threshold)
+    # coordinates,atomic_numbers = fetch_catalytic_sites(pdb_filepath=pdb_filepath,distance_threshold=distance_threshold)
     
-    coords_np = np.array(coordinates)
-    atoms_np = np.array(atomic_numbers)
+    # coords_np = np.array(coordinates)
+    # atoms_np = np.array(atomic_numbers)
     
     if len(coords_np) == 0:
         raise ValueError("No atoms found in PDB.")

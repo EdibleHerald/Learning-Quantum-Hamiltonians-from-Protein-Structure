@@ -1,14 +1,11 @@
 import numpy as np
 import warnings
 from Bio.PDB import PDBParser
-from active_site_calculation import active_site_calculation
 
-def pdb_to_tensor(pdb_filepath, grid_size:int,distance_threshold:float):
+def protein_to_tensor(coords, grid_size:int,distance_threshold:float):
     """
     Parses a PDB file, extracts atomic coordinates, and maps them to a 3D Voxel Tensor.
     """
-    
-    coords,atom_info = active_site_calculation(pdb_filepath=pdb_filepath,distance_threshold=distance_threshold)
     
     # 2. Normalize coordinates to fit within our 3D grid
     min_coords = coords.min(axis=0)

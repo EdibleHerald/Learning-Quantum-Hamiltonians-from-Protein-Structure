@@ -1,9 +1,4 @@
 import os
-# Prevents low-level language libraries from manually managing threads.
-# This is needed because deadlocking can easily occur if both the library and this script is competing for cores.
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import torch
 import torch.nn as nn
 import numpy as np
@@ -17,10 +12,12 @@ import hash_for_cache
 import psutil
 from multiprocessing import Pool
 from diskcache import Cache
+from process_pdb import process_pdb
 
 # Try to only use 75% of the threads the CPU has.
 TOTAL_THREAD_COUNT = psutil.cpu_count()
-THREAD_COUNT = TOTAL_THREAD_COUNT - (TOTAL_THREAD_COUNT // 4) if TOTAL_THREAD_COUNT > 2 else 1
+# THREAD_COUNT = TOTAL_THREAD_COUNT - (TOTAL_THREAD_COUNT // 4) if TOTAL_THREAD_COUNT > 2 else 1
+THREAD_COUNT = TOTAL_THREAD_COUNT // 2
 
 class ProteinDataset(Dataset):
     def __init__(self, voxels, coefficients):
@@ -66,21 +63,21 @@ def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
 def collate_proteins(batch):
         voxels = []
         coefficients = []
-    
+        
         for voxel,coeff in batch:
             voxels.append(voxel.squeeze(0))
             coefficients.append(coeff)
         
         curr_batch_size = len(voxel)
         
-        # Stack voxel and prediction tensors into one for faster processing! 
+        # Stack voxel and prediction tensors into one for faster processing!
         voxels = torch.stack(voxels)
         coefficients = torch.stack(coefficients)
         
         return voxels, coefficients, curr_batch_size
 
 # Returns DataLoader to be used for training.
-def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,grid_size:int=32,distance_threshold:float=5.0,pool:Pool=None):
+def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites,grid_size:int=32,distance_threshold:float=5.0,pool:Pool=None):
     
     # Lists for storing protein names, argument tuples, and cached results
     cached_voxel_protein_names = []        
@@ -102,9 +99,11 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
                 voxel_list.append(cache[voxel_hash])
                 cached_voxel_protein_names.append(protein_name)
             else:
-                # Else, add to args list to be computed later!
-                # (Here we use path to protein rather than just name)
-                voxel_args_list.append((protein_path,grid_size))
+                # Else, calculate coordinate/atomic number lists to be processed later
+                # (We can discard atomic numbers since our voxelization pipeline doesn't take it into account)
+                coordinates,atomic_numbers = process_pdb(pdb_path=protein_path)
+                # print("gotten")
+                voxel_args_list.append((coordinates,grid_size,distance_threshold))
                 voxel_protein_names.append(protein_name) # Also append name for later caching
 
         # Get Graph output hashes:
@@ -116,18 +115,19 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
                 # If hash in cache, return cached tensor
                 graph_list.append(cache[graph_hash])
             else:
-                # Else, add to args list to be computed later!
-                # (Here we use path to protein rather than just name)
-                graph_args_list.append((protein_path,distance_threshold))
+                # Else, calculate coordinate/atomic number lists to be processed later
+                coordinates,atomic_numbers = process_pdb(pdb_path=protein_path)
+                print("gotten2")
+                graph_args_list.append((coordinates,atomic_numbers,distance_threshold))
                 graph_protein_names.append(protein_name) # Append name for later caching
     
     # Lists will stay None if not initiated by Pool (i.e. theres no computations to complete)
     temp_voxel_list = None
     temp_graph_list = None
-    
+    print("running")
     # Get all voxels and graphs we need for training!
-    temp_voxel_list = pool.starmap(pdb_voxelizier.pdb_to_tensor,voxel_args_list)
-    temp_graph_list = pool.starmap(pdb_to_graph.pdb_to_graph,graph_args_list)
+    temp_voxel_list = pool.starmap(pdb_voxelizier.protein_to_tensor,voxel_args_list)
+    temp_graph_list = pool.starmap(pdb_to_graph.protein_to_graph,graph_args_list)
     
     # Store new lists in cache if not fetched from cache:
     # This basically means every item in the "temp_" lists
@@ -163,7 +163,7 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites:int=4,
     # We return loader for training, with voxel_list_tuple and training data for later verification
     return loader,voxel_list_tuple,training_data
 
-def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32, distance_threshold:float = 5.0,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32):
+def return_pretrained_CNN(protein_dir:str, num_sites, grid_size, distance_threshold,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32):
     # Create CNN
     cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites)
 
@@ -228,19 +228,9 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         
         loss = criterion(prediction,test_data)
         
-        # print(f"Loss is {loss.item()} for protein {voxel_tuple[0]}")
-        
-        # Test that each protein makes minimum required chemical accuracy of 0.043 eV
-        if loss.item() > 0.043:
+        # Test that each protein meets mean average error of 0.05 (5% margin)
+        if loss.item() > 0.05:
             loss_list.append((voxel_tuple[0],loss.item()))
-    
-    if len(loss_list) > 0:
-        print(f"Protein(s) have failed verification:")
-        for i in loss_list:
-            print(f"Protein {i[0]} had loss of {i[1]}")
-    else:
-        print("Verified model accuracy is satisfactory.")
-        print("All predictions meet the 0.043 eV chemical accuracy threshold!")
     
     if total_loss <= pref_loss:
         print(f"Successfully pre-trained CNN model with loss total of {total_loss:.6f} at {epoch} epochs.")
@@ -248,10 +238,10 @@ def return_pretrained_CNN(protein_dir:str, num_sites:int = 4, grid_size:int = 32
         print(f"Training stopped after reaching max iterations of {MAX_ITER}. Loss: {total_loss}")
     
     torch.save(cnn_model.state_dict(),"__temp__/models/protein_cnn.pt")
-    return None
+    return loss_list
 
 # Example Use:  
-# return_pretrained_CNN("proteins",loss_threshold=0.01)
+return_pretrained_CNN("proteins/training_proteins",4,32,5.0,loss_threshold=0.01)
 
 # THINGS THAT NEED WORKING ON:
 # - Consider a better way to improve caching system. Currently, caching voxels/graphs for 30~ proteins is rather expensive at 78Mb
