@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 from Bio.PDB import PDBParser
 
-def protein_to_tensor(coords, grid_size:int,distance_threshold:float):
+def protein_to_tensor(coords, grid_size:int):
     """
     Parses a PDB file, extracts atomic coordinates, and maps them to a 3D Voxel Tensor.
     """

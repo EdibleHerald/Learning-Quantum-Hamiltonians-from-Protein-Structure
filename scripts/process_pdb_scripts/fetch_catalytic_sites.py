@@ -60,8 +60,10 @@ def fetch_catalytic_sites(pdb_filepath:str):
                 chain_list.append(curr_chain) # If not in model, return to end of stack.
 
     if len(residue_dict) == 0:
-        print(f"Failing protein: {pdb_filepath}")
-        raise ValueError("No atoms found in PDB.")
+        # print(f"Failing protein: {pdb_filepath}")
+        # raise ValueError("No atoms found in PDB.")
+        print(f"Protein catalytic sites for {pdb_filepath} returned no values")
+        return None
     
     # Returns coordinates of extracted atom positions and their
     # accompanying atom element information. 

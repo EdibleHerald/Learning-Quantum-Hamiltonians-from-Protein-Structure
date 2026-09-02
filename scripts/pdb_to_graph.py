@@ -3,7 +3,7 @@ from Bio.PDB import PDBParser
 import torch
 from scipy.spatial import KDTree
 
-def protein_to_graph(coords_np,atoms_np, distance_threshold=5.0):
+def protein_to_graph(coords_np,atoms_np, distance_threshold=5.0,detach:bool=False):
     """
     Reads a PDB file and converts it into a molecular graph.
     Nodes = Atoms (Coordinates & Elements)
@@ -57,6 +57,7 @@ def protein_to_graph(coords_np,atoms_np, distance_threshold=5.0):
     
     edges_np = np.array(edges).T # Shape [2, num_edges]
     
+
     return {
         'x': torch.tensor(atoms_np, dtype=torch.float32).view(-1, 1),
         'pos': torch.tensor(coords_np, dtype=torch.float32),

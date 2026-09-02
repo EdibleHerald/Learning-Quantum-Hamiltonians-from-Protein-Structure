@@ -102,14 +102,14 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites,grid_s
                 # Else, calculate coordinate/atomic number lists to be processed later
                 # (We can discard atomic numbers since our voxelization pipeline doesn't take it into account)
                 coordinates,atomic_numbers = process_pdb(pdb_path=protein_path)
-                # print("gotten")
-                voxel_args_list.append((coordinates,grid_size,distance_threshold))
+                if coordinates is None:
+                    continue # Skip protein, has no active sites
+                voxel_args_list.append((coordinates,grid_size))
                 voxel_protein_names.append(protein_name) # Also append name for later caching
 
-        # Get Graph output hashes:
-        for protein_path in protein_path_list:
+            # Get Graph output hashes:
+        
             # Get protein name so we don't process paths by accident
-            protein_name = protein_path.split("/")[-1]
             graph_hash = hash_for_cache.graph_json_encoder(protein=protein_name,distance_threshold=distance_threshold).hexdigest()
             if graph_hash in cache:
                 # If hash in cache, return cached tensor
@@ -117,14 +117,15 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites,grid_s
             else:
                 # Else, calculate coordinate/atomic number lists to be processed later
                 coordinates,atomic_numbers = process_pdb(pdb_path=protein_path)
-                print("gotten2")
+                if coordinates is None:
+                    continue # Skip protein, has no active sites
                 graph_args_list.append((coordinates,atomic_numbers,distance_threshold))
                 graph_protein_names.append(protein_name) # Append name for later caching
     
     # Lists will stay None if not initiated by Pool (i.e. theres no computations to complete)
     temp_voxel_list = None
     temp_graph_list = None
-    print("running")
+
     # Get all voxels and graphs we need for training!
     temp_voxel_list = pool.starmap(pdb_voxelizier.protein_to_tensor,voxel_args_list)
     temp_graph_list = pool.starmap(pdb_to_graph.protein_to_graph,graph_args_list)
@@ -241,7 +242,7 @@ def return_pretrained_CNN(protein_dir:str, num_sites, grid_size, distance_thresh
     return loss_list
 
 # Example Use:  
-return_pretrained_CNN("proteins/training_proteins",4,32,5.0,loss_threshold=0.01)
+# return_pretrained_CNN("proteins/training_proteins",4,32,5.0,loss_threshold=0.01)
 
 # THINGS THAT NEED WORKING ON:
 # - Consider a better way to improve caching system. Currently, caching voxels/graphs for 30~ proteins is rather expensive at 78Mb

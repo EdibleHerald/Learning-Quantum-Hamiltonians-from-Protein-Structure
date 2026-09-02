@@ -39,6 +39,9 @@ def process_pdb(pdb_path:str):
         # Fetch catalytic residues
         residue_dict = fetch_catalytic_sites(pdb_path)
         
+        if not residue_dict:
+            return None,None # No catalytic sites found
+        
         # Export each residue into their own pdb files
         export_path_list = export_residue(residue_dict=residue_dict,export_dir=tmpdir)
                 
