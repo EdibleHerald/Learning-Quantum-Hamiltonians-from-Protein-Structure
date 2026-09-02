@@ -24,5 +24,5 @@ mapper = JordanWignerMapper()
 hartree = HartreeFock(num_spatial_orbitals=total_electrons, num_particles=num_particles,qubit_mapper=mapper)
 test_ansatz = UCCSD(num_spatial_orbitals=total_electrons,num_particles=num_particles,qubit_mapper=mapper)
 # # Extract operators:
-operator_pool = list(test_ansatz.operators) 
-print(len(operator_pool))
+# operator_pool = list(test_ansatz.operators) 
+# print(len(operator_pool))
