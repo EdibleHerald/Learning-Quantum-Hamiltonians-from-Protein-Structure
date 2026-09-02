@@ -1,7 +1,7 @@
 import sys
-sys.path.append("process_pdb_scripts")
-from fetch_catalytic_sites import fetch_catalytic_sites
+sys.path.append("scripts/process_pdb_scripts")
 from export_residue_as_pdb import export_residue
+from fetch_catalytic_sites import fetch_catalytic_sites
 from hydrogen_capping import add_hydrogen_atoms
 import os
 import tempfile
@@ -38,7 +38,7 @@ def process_pdb(pdb_path:str):
     with tempfile.TemporaryDirectory() as tmpdir:
         # Fetch catalytic residues
         residue_dict = fetch_catalytic_sites(pdb_path)
-        
+        print(len(residue_dict))
         if not residue_dict:
             return None,None # No catalytic sites found
         
@@ -51,7 +51,11 @@ def process_pdb(pdb_path:str):
             add_hydrogen_atoms(pdb_file=path)
             
             # Extract coordinate data from this residue
-            coordinates,atomic_numbers = extract_atomic_info(pdb_filepath=path,parser=parser)
+            coords,a_nums = extract_atomic_info(pdb_filepath=path,parser=parser)
+            
+            # Append coordinates to full coordinate list
+            coordinates += coords
+            atomic_numbers += a_nums
     
     return np.array(coordinates),np.array(atomic_numbers)
 
