@@ -7,6 +7,9 @@ import os
 import tempfile
 from Bio.PDB import PDBParser
 import numpy as np
+import hash_for_cache
+
+import time
 
 def extract_atomic_info(pdb_filepath,parser):
     coordinates = []
@@ -38,7 +41,7 @@ def process_pdb(pdb_path:str):
     with tempfile.TemporaryDirectory() as tmpdir:
         # Fetch catalytic residues
         residue_dict = fetch_catalytic_sites(pdb_path)
-        print(len(residue_dict))
+
         if not residue_dict:
             return None,None # No catalytic sites found
         
@@ -59,5 +62,14 @@ def process_pdb(pdb_path:str):
     
     return np.array(coordinates),np.array(atomic_numbers)
 
-# Example Usage:
-# print(process_pdb("proteins/training_proteins/9ATK.pdb"))
+# # Example Usage:
+# path = "proteins/training_proteins"
+# protein_names = os.listdir(path)
+# listpath = [f"{path}/{x}" for x in protein_names]
+
+# start = time.time()
+# for path in listpath:
+#     process_pdb(path)
+# end = time.time()
+
+# print(f"Took {end-start}s")
