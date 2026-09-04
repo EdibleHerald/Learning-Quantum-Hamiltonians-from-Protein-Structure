@@ -41,6 +41,9 @@ def download_proteins(dir_name:str,url_list:list(str),wipe_dir:bool=False) -> No
     
     # Go back two levels
     os.chdir("../../")
+
+# Defining training set, validation set, and testing set
+
 # Documenting exact category separation. All contain the
 # Ser-His-Asp motif, for GNN pretraining / CNN training
 
@@ -56,10 +59,15 @@ trypsin = [
     "1GDN",
     "1PPZ",
     "6YIY",
-    "5DJ7",
+    "5JBB",
     "2AGE",
     "2AGI",
-    "4M7G"
+    "4M7G",
+    "5MOO",
+    "5XW9",
+    "7AHV",
+    "2F9N",
+    "5MNB"
 ]
 
 chymotrypsinogen_A = [
@@ -77,7 +85,12 @@ chymotrypsinogen_A = [
     "1GL1",
     "1YPE",
     "2A2X",
-    "2P8O"
+    "2P8O",
+    "3BIU",
+    "5CHA",
+    "6Y9H",
+    "7JRX",
+    "9U8G"
 ]
 
 subtilisin = [
@@ -95,16 +108,55 @@ subtilisin = [
     "2PYZ",
     "2V8B",
     "2WUV",
-    "5ROU"
+    "5ROU",
+    "5ROI",
+    "5RP4",
+    "6K2R",
+    "6QF1",
+    "6RVE"
 ]
 
-# Test proteins, for testing against CNN:
+# Validation set, for preventing overfitting during training
+
+validation_trypsin = [
+    "6SVI",
+    "9I24",
+    "2CMY",
+    "2G8T",
+    "3A7V",
+    "4DOQ",
+    "4I8K"
+]
+
+validation_chymotrypsinogen_A = [
+    "3I77",
+    "3QWC",
+    "3SI3",
+    "6I51",
+    "6T7H",
+    "9ATU",
+    "1AD8"
+]
+
+validation_subtilisin = [
+    "3Q5G",
+    "4CFY",
+    "4FON",
+    "5ARC",
+    "5ROG",
+    "5ROH",
+    "5RP5"
+]
+
+# Test proteins, for testing against trained CNN:
 test_trypsin = [
     "5MNX",
     "5MO0",
     "5MON",
     "5MOR",
-    "5XW9"
+    "5XW9",
+    "1W12",
+    "4MNV"
 ]
 
 test_chymotrypsinogen_A = [
@@ -112,7 +164,9 @@ test_chymotrypsinogen_A = [
     "7AC9",
     "7Q0X",
     "1C5N",
-    "1T8M"
+    "1T8M",
+    "1QUR",
+    "2ZI2"
 ]
 
 test_subtilisin = [
@@ -120,11 +174,15 @@ test_subtilisin = [
     "6TXG",
     "6Y5S",
     "7NUZ",
-    "8RSG"
+    "8RSG",
+    "9FU1",
+    "1C3L"
 ]
 
 training_protein_names = trypsin + chymotrypsinogen_A + subtilisin
 testing_protein_names = test_trypsin + test_chymotrypsinogen_A + test_subtilisin
+validation_protein_names = validation_trypsin + validation_chymotrypsinogen_A + validation_subtilisin
 
 download_proteins("training_proteins",training_protein_names,True)
 download_proteins("testing_proteins",testing_protein_names,True)
+download_proteins("validation_proteins",validation_protein_names,True)
