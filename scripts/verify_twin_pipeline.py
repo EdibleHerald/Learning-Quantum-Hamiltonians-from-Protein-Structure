@@ -225,7 +225,7 @@ def run_verification(test_protein_dir:str,num_sites:int=4,grid_size:int=32,dista
             voxel_list,gnn_predictions,voxel_names = get_protein_data(
                 protein_path_list=proteins,
                 batch_size=32,
-                num_sites=num_sites ,
+                num_sites=num_sites,
                 grid_size=grid_size,
                 distance_threshold=distance_threshold,
                 pool=pool
