@@ -23,8 +23,9 @@ class MLDFT_GNN(nn.Module):
         # Global readout layer to predict physics coefficients
         self.readout = nn.Linear(64, self.num_interactions)
 
-    def forward(self, graph_dict):
-        x = graph_dict['x']
+    def forward(self, x):
+        # x = graph_tensor
+        # x = graph_dict['x']
         
         # Node embedding
         h = F.relu(self.node_embed(x))

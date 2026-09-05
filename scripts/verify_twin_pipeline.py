@@ -21,7 +21,7 @@ import cnn_mlp_encoder
 # import jw_quantum_mapper
 import hash_for_cache
 from diskcache import Cache
-from pretrain_CNN import ProteinDataset,collate_proteins
+from pretrain_CNN import ProteinDataset,collate_proteins,DEVICE
 from process_pdb import process_pdb
 
 # Try to only use 75% of the threads the CPU has.
@@ -115,7 +115,7 @@ def cross_verify_pipelines(coeffs_track_A, coeffs_track_B,num_sites):
 
 # Returns untrained GNN predictions and saves model under a name
 def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
-    gnn_model = mldft_surrogate.MLDFT_GNN(num_sites)
+    gnn_model = mldft_surrogate.MLDFT_GNN(num_sites).to(DEVICE)
     gnn_model.load_state_dict(torch.load("__temp__/models/protein_gnn.pt"))
     
     # for graph in graph_dict_list:
@@ -127,9 +127,12 @@ def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
     gnn_model.eval()
     for param in gnn_model.parameters():
         param.requires_grad = False
+    
+    # Get all position tensors
+    graph_tensor_list = [x['x'].to(DEVICE) for x in graph_dict_list]
     with torch.no_grad():
             # Parallel process GNN predictions using the calculated graphs
-            predicts = pool.map(gnn_model.forward,graph_dict_list)
+            predicts = pool.map(gnn_model.forward,graph_tensor_list)
 
     return predicts
 

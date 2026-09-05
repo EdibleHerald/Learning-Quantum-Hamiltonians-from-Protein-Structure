@@ -18,18 +18,21 @@ TOTAL_THREAD_COUNT = psutil.cpu_count()
 # THREAD_COUNT = TOTAL_THREAD_COUNT - (TOTAL_THREAD_COUNT // 4) if TOTAL_THREAD_COUNT > 2 else 1
 THREAD_COUNT = TOTAL_THREAD_COUNT // 2
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 class ProteinDataset(Dataset):
-    def __init__(self, voxels, coefficients):
+    def __init__(self, voxels, graphs):
         # Ensure that we'll have consistent dimension tensors
-        if len(voxels) != len(coefficients):
+        if len(voxels) != len(graphs):
             raise Exception("ProteinDataset::__init__() - Mismatched list sizes.")
         
         # Voxels
         self.VOXELS = voxels
 
         # Coefficients
-        self.COEFFS = coefficients
-    
+        # self.COEFFS = coefficients
+        self.GRAPHS = graphs
+          
     # Returns number of proteins  
     def __len__(self):
         return len(self.VOXELS)
@@ -38,40 +41,49 @@ class ProteinDataset(Dataset):
     # (Voxels are numpy arrays so they need conversion while coefficients are already tensors) 
     def __getitem__(self, index):
         voxel = torch.tensor(self.VOXELS[index], dtype=torch.float32)
-        coeff = self.COEFFS[index]
-        return voxel, coeff
+        # coeff = self.COEFFS[index]
+        graph = self.GRAPHS[index]
+        return voxel, graph
 
 # Returns untrained GNN predictions and saves model under a name
-def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
-    gnn_model = mldft_surrogate.MLDFT_GNN(num_sites)
+# def get_gnn_predictions(graph_dict_list:list,num_sites:int,pool:Pool):
+#     gnn_model = mldft_surrogate.MLDFT_GNN(num_sites).to(DEVICE)
     
-    # Prepare model for predictions by putting into evaluation mode/disabling gradients
-    gnn_model.eval()
-    for param in gnn_model.parameters():
-        param.requires_grad = False
+#     # Prepare model for predictions by putting into evaluation mode/disabling gradients
+#     gnn_model.eval()
+#     for param in gnn_model.parameters():
+#         param.requires_grad = False
 
-    # Parallel process GNN predictions using the calculated graphs
-    predicts = pool.map(gnn_model.forward,graph_dict_list)
+#     for i in range(len(graph_dict_list)):
+#         graph_dict_list[i]['x'] = graph_dict_list[i]['x'].to(DEVICE)
+#     # Parallel process GNN predictions using the calculated graphs
+#     predicts = pool.map(gnn_model.forward,graph_dict_list)
 
-    # Save model to test against later
-    torch.save(gnn_model.state_dict(),"__temp__/models/protein_gnn.pt")
+#     # Save model to test against later
+#     torch.save(gnn_model.state_dict(),"__temp__/models/protein_gnn.pt")
 
-    return predicts
+#     return predicts
 
 # Function used to package all data into DataLoader
 def collate_proteins(batch):
         voxels = []
-        coefficients = []
+        graphs = []
         
-        for voxel,coeff in batch:
+        for voxel,graph in batch:
             voxels.append(voxel.squeeze(0))
-            coefficients.append(coeff)
+            graphs.append(graph)
         
-        # Stack voxel and prediction tensors into one for faster processing!
-        voxels = torch.stack(voxels)
-        coefficients = torch.stack(coefficients)
+        # Stack voxel tensors into one for faster processing!
+        voxels = torch.stack(voxels).to(DEVICE)
         
-        return voxels, coefficients
+        # graphs = torch.stack(graphs).to(DEVICE)
+
+        # Graph tensors can't be stacked since they're not bound to be a consistent size
+        # We return graphs as a list of tensors, all moved to DEVICE
+        for i in range(len(graphs)):
+            graphs[i] = graphs[i].to(DEVICE)
+        
+        return voxels, graphs
 
 # Returns DataLoader to be used for training.
 def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites,grid_size:int=32,distance_threshold:float=5.0,pool:Pool=None):
@@ -147,24 +159,92 @@ def get_protein_data(protein_path_list:list(str),batch_size:int,num_sites,grid_s
 
     # Needs to be np.array because for some reason ProteinDataset expects it
     voxel_list = np.asarray(voxel_list, dtype = np.float32)
-    training_data = get_gnn_predictions(graph_dict_list=graph_list, num_sites=num_sites,pool=pool) # Pass down pool to avoid deadlocking
+    # training_data = get_gnn_predictions(graph_dict_list=graph_list, num_sites=num_sites,pool=pool) # Pass down pool to avoid deadlocking
     
     # Create DataLoader
-    dataset = ProteinDataset(voxel_list,training_data)
+    # dataset = ProteinDataset(voxel_list,training_data)
+    graph_tensor_list = [x['x'] for x in graph_list]
+    dataset = ProteinDataset(voxel_list,graph_tensor_list)
     
     # Now automatically loads proteins and shuffles order
     loader = DataLoader(dataset,batch_size=batch_size,shuffle=True, collate_fn=collate_proteins)
     
     # Protein names and their accompanying voxel representations.
-    voxel_list_tuple = zip(cached_voxel_protein_names,voxel_list)
+    # voxel_list_tuple = zip(cached_voxel_protein_names,voxel_list)
     
     # We return loader for training, with voxel_list_tuple and training data for later verification
-    return loader,voxel_list_tuple,training_data
+    return loader
 
-def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, grid_size, distance_threshold,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32,lr:float=0.001):
+def verify_model_loss(cnn_model,gnn_model,loader,validation_loader,criterion):
+    # Validate CNN performance
+    total_loss = 0
+    validation_total_loss = 0
+    total_samples_train = 0
+    total_samples_validation = 0
+    cnn_model.eval() # Put model into eval mode
+    with torch.no_grad():
+        # Validate against training set 
+        for voxel, graph in loader:
+            curr_batch_size = voxel.size(0)
+            
+            # CNN prediction
+            prediction = cnn_model(voxel)
+
+            graph_prediction_list = []
+            for tensor in graph:
+                with torch.no_grad():
+                    # GNN prediction
+                    temp_target = gnn_model(tensor)
+                graph_prediction_list.append(temp_target)
+            
+            # Stack graph tensors
+            target = torch.stack(graph_prediction_list).to(DEVICE)
+                
+            # Compare prediction with target coefficients 
+            loss = criterion(prediction,target)
+
+            # Update loss
+            total_loss += loss.item() * curr_batch_size
+            total_samples_train += curr_batch_size
+        
+        # Validate against validation set
+        for voxel, graph in validation_loader:
+            curr_batch_size = voxel.size(0)
+            
+            # CNN prediction
+            prediction = cnn_model(voxel)
+
+            graph_prediction_list = []
+            for tensor in graph:
+                with torch.no_grad():
+                    # GNN prediction
+                    temp_target = gnn_model(tensor)
+                graph_prediction_list.append(temp_target)
+            
+            # Stack graph tensors
+            target = torch.stack(graph_prediction_list).to(DEVICE)
+                
+            # Compare prediction with target coefficients 
+            loss = criterion(prediction,target)
+
+            # Update loss
+            validation_total_loss += loss.item() * curr_batch_size
+            total_samples_validation += curr_batch_size
+    
+    # Handle loss, we take per-sample loss average
+    total_loss = total_loss / total_samples_train
+    validation_total_loss = validation_total_loss / total_samples_validation
+    
+    return total_loss,validation_total_loss
+
+def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, grid_size, distance_threshold,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32,lr:float=0.001,loss_loop_threshold:int=10):
     # Create CNN
-    cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites)
+    cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites).to(DEVICE)
 
+    # Create GNN and put it into eval mode
+    gnn_model = mldft_surrogate.MLDFT_GNN(num_sites).to(DEVICE)
+    gnn_model.eval()
+    
     # Mean Squared Error (MSE): Helps keep error positive 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(cnn_model.parameters(), lr=lr)
@@ -178,33 +258,47 @@ def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, gr
     # Create Pool to pass down to other subprocesses (to avoid deadlocking and repetitive code)
     with Pool(THREAD_COUNT) as p:
         # Get protein data:
-        loader, voxel_list_tuple, training_data = get_protein_data(
-                                                    protein_path_list=proteins,
-                                                    num_sites=num_sites,
-                                                    grid_size=grid_size,
-                                                    distance_threshold=distance_threshold,
-                                                    batch_size=batch_size,
-                                                    pool=p
-                                                    )
+        loader = get_protein_data(
+                    protein_path_list=proteins,
+                    num_sites=num_sites,
+                    grid_size=grid_size,
+                    distance_threshold=distance_threshold,
+                    batch_size=batch_size,
+                    pool=p
+                    )
         
         # Get validation data:
-        validation_loader, validation_list_tuple, validation_training_data = get_protein_data(
-                                                                                protein_path_list=validation_proteins,
-                                                                                num_sites=num_sites,
-                                                                                grid_size=grid_size,
-                                                                                distance_threshold=distance_threshold,
-                                                                                batch_size=batch_size,
-                                                                                pool=p
-                                                                                )
+        validation_loader = get_protein_data(
+                                protein_path_list=validation_proteins,
+                                num_sites=num_sites,
+                                grid_size=grid_size,
+                                distance_threshold=distance_threshold,
+                                batch_size=batch_size,
+                                pool=p
+                                )
 
     # Training loop
     total_loss = float("inf")
     epoch = 0
     MAX_ITER = max_iterations
     
+    iterations_under_threshold = 0
+    
     total_loss_history = []
     validation_loss_history = []
-    while total_loss > loss_threshold and epoch != MAX_ITER:
+        
+    # Get initial loss before training
+    total_loss,validation_total_loss = verify_model_loss(
+                                    cnn_model=cnn_model,
+                                    gnn_model=gnn_model,
+                                    loader=loader,
+                                    validation_loader=validation_loader,
+                                    criterion=criterion
+                                    )
+    total_loss_history.append(total_loss)
+    validation_loss_history.append(validation_total_loss)
+
+    while iterations_under_threshold <= loss_loop_threshold and epoch != MAX_ITER:
         # Put model into training mode
         cnn_model.train()
         
@@ -214,17 +308,27 @@ def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, gr
         
         # Accumulate batch size to calculate per-sample error
         total_samples_train = 0
-        total_samples_validation = 0
         
         # validate CNN
-        for voxel, target in loader:
+        for voxel, graph in loader:
             
             curr_batch_size = voxel.size(0)
             # print(f"curr batch size: {curr_batch_size}")
             
             # CNN prediction
             prediction = cnn_model(voxel)
-
+            
+            graph_prediction_list = []
+            
+            for tensor in graph:
+                with torch.no_grad():
+                    # GNN prediction
+                    temp_target = gnn_model(tensor)
+                graph_prediction_list.append(temp_target)
+            
+            # Stack graph tensors
+            target = torch.stack(graph_prediction_list).to(DEVICE)
+            
             # Compare prediction with target coefficients 
             loss = criterion(prediction,target)
             
@@ -235,35 +339,25 @@ def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, gr
             loss.backward()
 
             # Update values 
-            optimizer.step()
-            
-            total_loss += loss.item() * curr_batch_size
-            total_samples_train += curr_batch_size
+            optimizer.step()            
+            # total_loss += loss.item() * curr_batch_size
+            # total_samples_train += curr_batch_size
         
-        # Validate CNN performance
-        cnn_model.eval() # Put model into eval mode
-        with torch.no_grad():
-            for voxel, target in validation_loader:
-                curr_batch_size = voxel.size(0)
-                # print(f"curr batch size: {curr_batch_size}")
-                
-                # CNN prediction
-                prediction = cnn_model(voxel)
-
-                # Compare prediction with target coefficients 
-                loss = criterion(prediction,target)
-
-                # Update loss
-                validation_total_loss += loss.item() * curr_batch_size
-                total_samples_validation += curr_batch_size
-    
-        # Handle loss, we take per-sample loss average
-        total_loss = total_loss / total_samples_train
-        validation_total_loss = validation_total_loss / total_samples_validation
+        total_loss,validation_total_loss = verify_model_loss(
+                                            cnn_model=cnn_model,
+                                            gnn_model=gnn_model,
+                                            loader=loader,
+                                            validation_loader=validation_loader,
+                                            criterion=criterion
+                                            )
         
         # Add losses to history list
         total_loss_history.append(total_loss)
         validation_loss_history.append(validation_total_loss)
+        
+        # Iterate loop counter
+        if total_loss < loss_threshold and validation_total_loss < loss_threshold:
+            iterations_under_threshold += 1
         
         # Note: Ideally loss should decrease overtime
         epoch += 1
@@ -292,7 +386,11 @@ def return_pretrained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, gr
     else:
         print(f"Training stopped after reaching max iterations of {MAX_ITER}. Loss: {total_loss}")
     
+    # Save CNN
     torch.save(cnn_model.state_dict(),"__temp__/models/protein_cnn.pt")
+    # Save GNN
+    torch.save(gnn_model.state_dict(),"__temp__/models/protein_gnn.pt")
+    
     return total_loss_history,validation_loss_history
 
 # Example Use:  
