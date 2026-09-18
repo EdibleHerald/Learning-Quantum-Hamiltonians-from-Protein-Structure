@@ -35,16 +35,18 @@ class ProteinPhysicsEncoder(nn.Module):
         physics_coefficients = self.fc2(latent_embedding)
         return physics_coefficients
 
-def get_hamiltonian(tensor_array, num_qubits=4):
+def get_hamiltonian(tensor_array,model_path , num_qubits=4):
     """
     Helper function to run the tensor through the model.
     num_qubits defines how many sites we are simulating on hardware.
     """
     model = ProteinPhysicsEncoder(num_sites=num_qubits)
+    model.load_state_dict(torch.load(model_path))
     
     # Convert numpy array to PyTorch Tensor
     tensor_pt = torch.from_numpy(tensor_array)
     
+    model.eval()
     # Forward pass (without calculating gradients for inference)
     with torch.no_grad():
         coeffs = model(tensor_pt)

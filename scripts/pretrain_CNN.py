@@ -182,6 +182,7 @@ def verify_model_loss(cnn_model,gnn_model,loader,validation_loader,criterion):
     total_samples_train = 0
     total_samples_validation = 0
     cnn_model.eval() # Put model into eval mode
+    gnn_model.eval()
     with torch.no_grad():
         # Validate against training set 
         for voxel, graph in loader:

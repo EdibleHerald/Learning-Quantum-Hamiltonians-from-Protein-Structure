@@ -46,63 +46,124 @@ def get_dft_values(coord_list,atomic_num_list,num_sites:int,pool:Pool):
     
     return gse_list # Ordered to match proteins in protein_path_list
 
-def return_trained_CNN(protein_dir:str, num_sites, grid_size, distance_threshold,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32):
-    # Import pretrained model
-    cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites)
-    cnn_model.load_state_dict(torch.load("__temp__/models/protein_cnn.pt"))
+def verify_model_loss(cnn_model,loader,validation_loader,criterion):
+    # Validate CNN performance
+    total_loss = 0
+    validation_total_loss = 0
+    total_samples_train = 0
+    total_samples_validation = 0
+    cnn_model.eval() # Put model into eval mode
+    with torch.no_grad():
+        # Validate against training set 
+        for voxel, target in loader:
+            curr_batch_size = voxel.size(0)
+            
+            # CNN prediction
+            prediction = cnn_model(voxel)
+            
+            # Compare prediction with target coefficients 
+            loss = criterion(prediction,target)
+
+            # Update loss
+            total_loss += loss.item() * curr_batch_size
+            total_samples_train += curr_batch_size
+        
+        # Validate against validation set
+        for voxel, target in validation_loader:
+            curr_batch_size = voxel.size(0)
+            
+            # CNN prediction
+            prediction = cnn_model(voxel)
+
+            # Compare prediction with target coefficients 
+            loss = criterion(prediction,target)
+
+            # Update loss
+            validation_total_loss += loss.item() * curr_batch_size
+            total_samples_validation += curr_batch_size
+    
+    # Handle loss, we take per-sample loss average
+    total_loss = total_loss / total_samples_train
+    validation_total_loss = validation_total_loss / total_samples_validation
+    
+    return total_loss,validation_total_loss
+
+def return_trained_CNN(test_set_dir:str,validation_set_dir:str, num_sites, grid_size, distance_threshold,max_iterations:int=100,loss_threshold:float=0.043,batch_size:int=32,lr:float=0.001,loss_loop_threshold:int=10):
+    # Create CNN
+    cnn_model = cnn_mlp_encoder.ProteinPhysicsEncoder(num_sites).to(DEVICE)
     
     # Mean Squared Error (MSE): Helps keep error positive 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(cnn_model.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(cnn_model.parameters(), lr=lr)
 
-    # Get list of all proteins to test against
-    proteins = [os.path.join(protein_dir,x) for x in os.listdir(protein_dir)]
+    # Get list of all proteins to train against
+    proteins = [os.path.join(test_set_dir,x) for x in os.listdir(test_set_dir)]
     
-    # Get all coordinates/atomic numbers needed
-    coord_list = []
-    atomic_num_list = []
-    protein_path_list = [] # Only store proteins that have catalytic sites that could be fetched
-    for path in proteins:
-        coords,atomic_nums = process_pdb(pdb_path=path)
+    # Get list of all proteins to validate against
+    validation_proteins = [os.path.join(validation_set_dir,x) for x in os.listdir(validation_set_dir)]
         
-        if coords is None or atomic_nums is None:
-            print(f"Protein catalytic sites for {protein_path} returned no values. Cannot train on this protein, skipped.")
-            continue # Skip, no data found
-        
-        protein_path_list.append(path)
-        coord_list.append(coords)
-        atomic_num_list.append(atomic_nums)
-    
     # Create Pool to pass down to other subprocesses (to avoid deadlocking and repetitive code)
     with Pool(THREAD_COUNT) as p:
-        # Compute DFT values
-        # (change variable name later)
-        result_list = get_dft_values(coord_list=coord_list,atomic_num_list=atomic_num_list,num_sites=num_sites,pool=p)
-        # Get Voxelization!
-        voxel_arg = [(x,grid_size) for x in coord_list]
-        voxel_list = p.starmap(protein_to_tensor)
-    
-    # Create dataset
-    Dataset = ProteinDataset(np.asarray(voxel_list),np.asarray(result_list))
-    
-    # Create dataloader
-    Dataloader = Dataloader(Dataset, batch_size=batch_size,shuffle=True, collate_fn=collate_proteins)
-    
+        # Get protein data:
+        loader = get_protein_data(
+                    protein_path_list=proteins,
+                    num_sites=num_sites,
+                    grid_size=grid_size,
+                    distance_threshold=distance_threshold,
+                    batch_size=batch_size,
+                    pool=p
+                    )
+        
+        # Get validation data:
+        validation_loader = get_protein_data(
+                                protein_path_list=validation_proteins,
+                                num_sites=num_sites,
+                                grid_size=grid_size,
+                                distance_threshold=distance_threshold,
+                                batch_size=batch_size,
+                                pool=p
+                                )
+
     # Training loop
     total_loss = float("inf")
     epoch = 0
     MAX_ITER = max_iterations
     
-    pref_loss = loss_threshold
-    while total_loss > pref_loss and epoch != MAX_ITER:
+    iterations_under_threshold = 0
+    
+    total_loss_history = []
+    validation_loss_history = []
+        
+    # Get initial loss before training
+    total_loss,validation_total_loss = verify_model_loss(
+                                    cnn_model=cnn_model,
+                                    loader=loader,
+                                    validation_loader=validation_loader,
+                                    criterion=criterion
+                                    )
+    total_loss_history.append(total_loss)
+    validation_loss_history.append(validation_total_loss)
+
+    while iterations_under_threshold <= loss_loop_threshold and epoch != MAX_ITER:
+        # Put model into training mode
+        cnn_model.train()
+        
         # Track loss
         total_loss = 0
-
-        # Unpack batches from loader
-        for voxel, target, curr_batch_size in loader:
+        validation_total_loss = 0 
+        
+        # Accumulate batch size to calculate per-sample error
+        total_samples_train = 0
+        
+        # validate CNN
+        for voxel, target in loader:
+            
+            curr_batch_size = voxel.size(0)
+            # print(f"curr batch size: {curr_batch_size}")
+            
             # CNN prediction
             prediction = cnn_model(voxel)
-
+        
             # Compare prediction with target coefficients 
             loss = criterion(prediction,target)
             
@@ -114,35 +175,31 @@ def return_trained_CNN(protein_dir:str, num_sites, grid_size, distance_threshold
 
             # Update values 
             optimizer.step()
-            total_loss += loss.item()
         
-        # Handle loss, we take average loss of stacked tensors
-        avg_loss = total_loss / curr_batch_size
-
+        total_loss,validation_total_loss = verify_model_loss(
+                                            cnn_model=cnn_model,
+                                            loader=loader,
+                                            validation_loader=validation_loader,
+                                            criterion=criterion
+                                            )
+        
+        # Add losses to history list
+        total_loss_history.append(total_loss)
+        validation_loss_history.append(validation_total_loss)
+        
+        # Iterate loop counter
+        if total_loss < loss_threshold and validation_total_loss < loss_threshold:
+            iterations_under_threshold += 1
+        
         # Note: Ideally loss should decrease overtime
         epoch += 1
     
-    # Test CNN against trained proteins.   
-    # Prepare model for predictions by putting into evaluation mode/disabling gradients
-    cnn_model.eval()
-    for param in cnn_model.parameters():
-        param.requires_grad = False
-    
-    loss_list = []
-    for voxel_tuple,test_data in zip(voxel_list_tuple,training_data):
-        voxel_tensor = torch.tensor(voxel_tuple[1])
-        prediction = cnn_model(voxel_tensor).squeeze(0) # Sqeeze from tensor size [ batch features ] to [ features ]
-        
-        loss = criterion(prediction,test_data)
-        
-        # Test that each protein meets mean average error of 0.05 (5% margin)
-        if loss.item() > 0.05:
-            loss_list.append((voxel_tuple[0],loss.item()))
-    
-    if total_loss <= pref_loss:
+    if total_loss <= loss_threshold:
         print(f"Successfully pre-trained CNN model with loss total of {total_loss:.6f} at {epoch} epochs.")
     else:
         print(f"Training stopped after reaching max iterations of {MAX_ITER}. Loss: {total_loss}")
     
+    # Save CNN
     torch.save(cnn_model.state_dict(),"__temp__/models/protein_cnn.pt")
-    return loss_list
+    
+    return total_loss_history,validation_loss_history
